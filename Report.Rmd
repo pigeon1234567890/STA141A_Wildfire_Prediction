@@ -3,3 +3,19 @@ title: "Report"
 output: html_document
 ---
 
+```{r}
+library(tidyverse)
+library(maps)
+library(lubridate)
+library(shiny)
+```
+
+```{r}
+wildFire100k <- read_csv(file = "./Data/wildfires_sample_100k.csv")
+notableFires <- wildFire100k %>%
+  filter(FIRE_SIZE >= 300)
+```
+
+# 1) Data Preprocessing
+
+For our predictive tasks, we are interested in identifying and predicting "notable" fires that can cause major damage. In order to reflect this, the dataset is filtered to include only fires with a final burned size of 300 acres (FIRE_SIZE >= 300). 
