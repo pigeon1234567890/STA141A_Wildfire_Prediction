@@ -4,18 +4,86 @@ output: html_document
 ---
 
 ```{r}
-library(tidyverse)
-library(maps)
-library(lubridate)
-library(shiny)
-```
+suppressMessages({
+  library(tidyverse)
+  library(maps)
+  library(lubridate)
+  library(shiny)
+})
 
-```{r}
-wildFire100k <- read_csv(file = "./Data/wildfires_sample_100k.csv")
-notableFires <- wildFire100k %>%
-  filter(FIRE_SIZE >= 300)
 ```
 
 # 1) Data Preprocessing
 
-For our predictive tasks, we are interested in identifying and predicting "notable" fires that can cause major damage. In order to reflect this, the dataset is filtered to include only fires with a final burned size of 300 acres (FIRE_SIZE >= 300). 
+The full dataset [link](https://www.kaggle.com/datasets/rtatman/188-million-us-wildfires/data) contains 1.88 million entries of wildfires. The dataset of is of 795 MB in size. I use a smaller subset that contains 100,000 entries provided by Dr. Shizhe Chen for his Winter 2026 STA141A course at UC Davis. Detailed description of variables in the dataset is available on Kaggle.
+
+```{r}
+#dataset with 100k wildfires
+wildFire100k <- read_csv(file = "./Data/wildfires_sample_100k.csv") %>% 
+  select(FIRE_YEAR, DISCOVERY_DOY, FIRE_SIZE, LATITUDE, LONGITUDE, STATE) %>%
+  mutate(STATE = as.factor(STATE))
+```
+
+I also used [link](https://www.kaggle.com/datasets/justinrwong/average-monthly-temperature-by-us-state) to contribute the monthly/annual temperature of the states to this project. Credit to Justin Wong.
+
+What I modified:
+
+-   Creating a new columns: `avg_yearly_temp` and `month_hotter_than_year_avg` :
+
+    -   `avg_yearly_temp`  - contains the average annual temperature of that state
+
+    -   `month_hotter_than_year_avg` - compares and sees if `average_temp` is greater than `avg_yearly_temp`
+
+-   include ONLY years between 1992 and 2015
+
+-   removed all other columns outside of `month`, `year`, `state`, `average_temp`, and two self-created columns: `avg_yearly_temp` and `month_hotter_than_year_avg`
+
+-   put all state names in column `state` into lowercase
+
+```{r}
+state_monthly_year_temp <- read_csv(file = "./Data/states_monthly_yearly_temp.csv") 
+
+```
+
+```{r}
+
+
+#Filtered for notable fires
+notableFires <- wildFire100k %>%
+  filter(FIRE_SIZE >= 300)
+
+#Mutate column for FireDate and get Year and Month individually
+notableFiresTime <- notableFires %>% 
+    mutate(FIRE_DATE = as.Date(paste(FIRE_YEAR, DISCOVERY_DOY, sep = "-"), format = "%Y-%j"),
+          YEAR = year(FIRE_DATE),
+          MONTH = month(FIRE_DATE))
+
+#GRID and for each lat and long
+notableFiresTime <- notableFiresTime %>%
+  mutate(
+    lat_bin = floor(LATITUDE),
+    lon_bin = floor(LONGITUDE),
+    ym = YEAR * 100 + MONTH   # e.g., 201507
+  )
+
+# Fire indicator at (grid, month): did any notable fire occur?
+
+######### FILL IN THE MISSING PARTS #########
+ grid_month_fire <- notableFiresTime %>% 
+  group_by(lat_bin, lon_bin, ym) %>%
+  summarize(n_fires = n(),
+            fire_this_month = as.numeric(n_fires > 0))
+
+
+#########
+
+head(grid_month_fire)
+```
+
+# 1) Data Preprocessing
+
+For our predictive purposes, I want to emphasize and use these specific columns: - `FIRE_YEAR` - `DISCOVERY_DOY` - `FIRE_SIZE` - `LATITUDE` - `LONGITUDE` - `STATE` So I will mainly focus on these columns.
+
+We use `FIRE_YEAR` and `DISCOVERY_DOY` to create a new column `FIRE_DATE` that puts the date in which the fire started in the format Y-M-D. We can also then separate that to get the individual year and month of each fire in the `YEAR` and `MONTH` column.
+
+For our predictive tasks, we are interested in identifying and predicting "notable" fires that can cause major damage. In order to reflect this, the dataset is filtered to include only fires with a final burned size of 300 acres (`FIRE_SIZE` \>= 300).
