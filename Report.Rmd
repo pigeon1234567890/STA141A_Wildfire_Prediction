@@ -9,6 +9,8 @@ suppressMessages({
   library(maps)
   library(lubridate)
   library(shiny)
+  library(slider)
+  library(pROC)
 })
 
 ```
@@ -41,7 +43,7 @@ What I modified:
 -   put all state names in column `state` into lowercase
 
 ```{r}
-state_monthly_year_temp <- read_csv(file = "./Data/states_monthly_yearly_temp.csv") 
+state_monthly_year_temp <- read_csv(file = "./Data/states_monthly_yearly_temp.csv")
 ```
 
 ## Temporal Patterns and Threshold for "Notable" Fires
@@ -112,9 +114,10 @@ panel$n_fires[is.na(panel$n_fires)] <- 0
 panel$fire_this_month[is.na(panel$fire_this_month)] <- 0
 ```
 
-## Predictability Column 
+## Predictability Column
 
 We add a binary column `y_next` that returns 1 if the same lat/long cell next month has at least one notable wildfire. (0 is not)
+
 ```{r}
 panel <- panel %>%
   arrange(lat_bin, lon_bin, ym) %>%
@@ -129,19 +132,83 @@ table(panel$y_next)
 ```
 
 ## Baseline Predictors
+
 ### `state`
 
+This [link](https://www.statology.org/mode-in-r/) helped me develop the `mode_state` function for determining which state appears the most frequent in terms of notable wildfire frequency.
+
 ```{r}
-######### FILL IN THE MISSING PARTS #########
-# mode_state <- function(x) { ...
+#function that picks the largest 
+ mode_state <- function(x) { 
+  uniqueVals <- unique(x)
+  count <- tabulate(match(x, uniqueVals))
+  uniqueVals[which.max(tabulate(match(x, uniqueVals)))] 
+   
+ }
 
-# grid_state <- notable_fires %>% ...
 
-#########
+ grid_state <- notableFiresTime %>% 
+   group_by(lat_bin, lon_bin) %>%
+   summarize(state = mode_state(STATE))
 
 panel <- panel %>%
   left_join(grid_state, by = c("lat_bin","lon_bin"))
 
 panel %>% select('state') %>% summary
+```
+
+### Seasonality (MONTHS)
+We want to make it feel more like a cycle as numerically January and December are far apart; however, in reality they are close together.
+
+```{r}
+# make a cos and sin column that calculates sin or cos of ((2 * pi) * (month/12))
+ panel <- panel %>% 
+  mutate('month_sin' = sin((2*pi) * (panel$month/12)),
+         'month_cos' = cos((2*pi) * (panel$month/12)))
+  
+
+
+#########
+
+panel %>% select('month_sin', 'month_cos') %>% head
+```
+### Lagged fire history
+`n_fires` - # of fires occurred that month and grid
+`fire_lag12` - # of fires occurred that month and grid one year ago
+`fire_roll3` - # of fire that occurred in this grid cell the last three months
+`fire_roll12` - # of fire that occurred in this grid cell the last year
+`size_roll3` - average fire size in this grid cell the last three months
+`size_roll12` - average fire size in this grid cell the last year
+
+```{r}
+# mutate fire_size which will be used to calculate size_roll3 and size_roll12
+grid_fire_size <- notableFiresTime %>%
+  group_by(lat_bin, lon_bin, ym) %>%
+  mutate(fire_size = mean(FIRE_SIZE))
+
+  
+
+
+
+panel <- panel %>%
+  left_join(grid_fire_size, by = c("lat_bin","lon_bin", "ym")) %>%
+  mutate(fire_size = coalesce(fire_size, 0))
+
+#creates our new variables
+panel <- panel %>%
+  arrange(lat_bin, lon_bin, ym) %>%
+  group_by(lat_bin, lon_bin) %>% 
+  mutate(
+    #sees if there was a wildfire a year ago in same location and month  ,
+    'fire_lag12' = lag(n_fires, 12), 
+    'fire_roll3' = slide_dbl(n_fires, sum, .before = 2), 
+    'fire_roll12' = slide_dbl(n_fires, sum, .before = 11),
+    'size_roll3' = slide_dbl(fire_size, mean, .before = 2),
+    'size_roll12' = slide_dbl(fire_size, mean, .before = 11))
+
+panel %>% 
+  select("n_fires", "fire_lag12", "fire_roll3", "fire_roll12", 
+         "size_roll3", "size_roll12") %>%
+  summary()
 
 ```
