@@ -184,10 +184,7 @@ panel %>% select('month_sin', 'month_cos') %>% head
 # mutate fire_size which will be used to calculate size_roll3 and size_roll12
 grid_fire_size <- notableFiresTime %>%
   group_by(lat_bin, lon_bin, ym) %>%
-  mutate(fire_size = mean(FIRE_SIZE))
-
-  
-
+  summarize(fire_size = FIRE_SIZE)
 
 
 panel <- panel %>%
@@ -200,12 +197,16 @@ panel <- panel %>%
   group_by(lat_bin, lon_bin) %>% 
   mutate(
     #sees if there was a wildfire a year ago in same location and month  ,
-    'fire_lag12' = lag(n_fires, 12), 
+    'fire_lag12' = coalesce(lag(n_fires, 12), 0), 
     'fire_roll3' = slide_dbl(n_fires, sum, .before = 2), 
     'fire_roll12' = slide_dbl(n_fires, sum, .before = 11),
-    'size_roll3' = slide_dbl(fire_size, mean, .before = 2),
-    'size_roll12' = slide_dbl(fire_size, mean, .before = 11))
-
+    'size_roll3' = 
+      ifelse(fire_roll3 == 0, 0, slide_dbl(fire_size, sum, .before = 2)/fire_roll3),
+    'size_roll12' = 
+      ifelse(fire_roll12 == 0, 0, slide_dbl(fire_size, sum, .before = 11)/fire_roll12)
+  )
+#ifelse(fire_roll3 == 0, 0, slide_dbl(fire_size, sum, .before = 2)/fire_roll3
+#ifelse(fire_roll12 == 0, 0, slide_dbl(fire_size, sum, .before = 11)/fire_roll12)
 panel %>% 
   select("n_fires", "fire_lag12", "fire_roll3", "fire_roll12", 
          "size_roll3", "size_roll12") %>%
