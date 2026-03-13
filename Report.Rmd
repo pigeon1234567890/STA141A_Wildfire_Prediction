@@ -184,7 +184,7 @@ panel %>% select('month_sin', 'month_cos') %>% head
 # mutate fire_size which will be used to calculate size_roll3 and size_roll12
 grid_fire_size <- notableFiresTime %>%
   group_by(lat_bin, lon_bin, ym) %>%
-  summarize(fire_size = FIRE_SIZE)
+  summarize(fire_size = sum(FIRE_SIZE))
 
 
 panel <- panel %>%
@@ -200,6 +200,8 @@ panel <- panel %>%
     'fire_lag12' = coalesce(lag(n_fires, 12), 0), 
     'fire_roll3' = slide_dbl(n_fires, sum, .before = 2), 
     'fire_roll12' = slide_dbl(n_fires, sum, .before = 11),
+
+    
     'size_roll3' = 
       ifelse(fire_roll3 == 0, 0, slide_dbl(fire_size, sum, .before = 2)/fire_roll3),
     'size_roll12' = 
@@ -211,5 +213,92 @@ panel %>%
   select("n_fires", "fire_lag12", "fire_roll3", "fire_roll12", 
          "size_roll3", "size_roll12") %>%
   summary()
+
+#dataset_summary table
+dataset_summary <- tibble(
+  n_rows = nrow(panel),
+  year_min = min(panel$year),
+  year_max = max(panel$year),
+  spatial_unit = "1° x 1° lat-lon grid (floor bins)",
+  temporal_unit = "monthly",
+  outcome = "y_next = 1 if any notable fire occurs in grid cell next month",
+  predictors = "lat_bin, lon_bin, state, month_cos, month_sin, year, 
+    n_fires, fire_lag12, fire_roll3, fire_roll12, 
+    size_roll3, size_roll12"
+)
+```
+
+# Exploratory Data Analysis
+
+```{r}
+#For Time and Space Interactive PLOT
+
+#Set up eda_spatial for shiny plot and group by year
+eda_spatial <- panel %>% 
+  group_by(lat_bin, lon_bin, year) %>%
+  mutate(fire_rate = mean(y_next))
+
+ui <- fluidPage(
+   sliderInput("Year", "Select a Year from 1992 to 2015", 
+               value = 1992, min = 1992, max = 2015),
+  mainPanel(
+  plotOutput("notableFireRate", height = "400")
+)
+)
+
+server <- function(input, output, session) {
+  output$notableFireRate <- renderPlot({
+    #
+    filteredByYear <- eda_spatial %>%
+      filter(year == input$Year[1]) 
+    
+    ggplot(filteredByYear, aes(x = lon_bin, y = lat_bin, fill = fire_rate)) +
+  coord_quickmap(xlim = c(-125, -65), ylim = c(25, 50)) + 
+  geom_tile() +
+  labs(
+    title = paste("Spatial and Time pattern: Mean next-month notable-fire rate by grid cell in", input$Year[1]),
+    x = "Longitude bin (floor)",
+    y = "Latitude bin (floor)",
+    fill = "Mean y_next")
+  })
+}
+shinyApp(ui, server)
+```
+
+```{r}
+eda_month <- panel %>% 
+  group_by(month, year) %>%
+  mutate("mean_y_next" = mean(y_next))
+
+
+#########
+ui <- fluidPage(
+   sliderInput("Year", "Select a Year from 1992 to 2015", 
+               value = 1992, min = 1992, max = 2015),
+  mainPanel(
+  plotOutput("seasonFireRate", height = "400")
+)
+)
+
+server <- function(input, output, session) {
+  output$seasonFireRate <- renderPlot({
+    #
+    filteredByYear <- eda_month %>%
+      filter(year == input$Year[1]) 
+    
+  ggplot(filteredByYear, aes(x = month, y = mean_y_next)) +
+    geom_line() +
+    geom_point() +
+    coord_cartesian(ylim = c(0, .06)) +
+    scale_x_continuous(breaks = 1:12) +
+    labs(
+      title = paste("Seasonality: Mean probability of a notable fire in the next month in",
+                    input$Year[1]),
+      x = "Month",
+      y = "Mean of y_next"
+    )
+  })
+}
+shinyApp(ui, server)
 
 ```
