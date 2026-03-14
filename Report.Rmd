@@ -10,10 +10,15 @@ suppressMessages({
   library(lubridate)
   library(shiny)
   library(slider)
+  library(randomForest)
   library(pROC)
+  
 })
 
 ```
+
+#Abstract
+
 
 # 1) Data Preprocessing
 
@@ -166,8 +171,6 @@ We want to make it feel more like a cycle as numerically January and December ar
   mutate('month_sin' = sin((2*pi) * (panel$month/12)),
          'month_cos' = cos((2*pi) * (panel$month/12)))
   
-
-
 #########
 
 panel %>% select('month_sin', 'month_cos') %>% head
@@ -214,6 +217,25 @@ panel %>%
          "size_roll3", "size_roll12") %>%
   summary()
 
+```
+
+```{r}
+state_monthly_year_temp
+
+panel %>%
+  left_join(state_monthly_year_temp)
+
+panel %>%
+  arrange(lat_bin, lon_bin, ym) %>%
+  group_by(lat_bin, lon_bin) %>%
+  mutate(
+    month_next_hotter = lead(month_hotter_than_year_avg, n = 1L)
+  ) %>%
+  ungroup() %>%
+  filter(!is.na(y_next))
+```
+
+```{r}
 #dataset_summary table
 dataset_summary <- tibble(
   n_rows = nrow(panel),
@@ -226,9 +248,12 @@ dataset_summary <- tibble(
     n_fires, fire_lag12, fire_roll3, fire_roll12, 
     size_roll3, size_roll12"
 )
+
 ```
 
-# Exploratory Data Analysis
+
+
+# 2) Exploratory Data Analysis
 
 ```{r}
 #For Time and Space Interactive PLOT
@@ -300,5 +325,117 @@ server <- function(input, output, session) {
   })
 }
 shinyApp(ui, server)
+```
+
+# 3) Modeling 
+
+```{r}
+model_df <- panel %>%
+  mutate(y_next = factor(y_next, levels = c(0, 1))) %>%
+  select(y_next, lat_bin, lon_bin, state, 
+         month_cos, month_sin, year, 
+         n_fires, fire_lag12, fire_roll3, fire_roll12, size_roll3, size_roll12)
+glimpse(model_df)
+```
+
+In this report, we will fit two models:
+
+1) Logistic Regression using the predictors: 
+`lat_bin`, `lon_bin`, `state`, `month_cos`, `month_sin`, `year`, `n_fires`, `fire_lag12`, `fire_roll3`, `fire_roll12`, `size_roll3`, `size_roll12`
+to predict `y_next` which indicates whether or not the next month will contain at least one "notable" wildfire. This model will serve as the benchmark for performance.
+
+
+
+2) Random Forest with `ranger` package using the predictors: 
+`lat_bin`, `lon_bin`, `state`, `month_cos`, `month_sin`, `year`, `n_fires`, `fire_lag12`, `fire_roll3`, `fire_roll12`, `size_roll3`, `size_roll12`
+to predict `y_next`. A decision tree like random forest is able to handle non-linear trends between our predictors and `y_next` better than a logistic regression and it remains interpretable.
+
+# 4 Model Fitting and Validation
+
+[link](https://stackoverflow.com/questions/64060369/ranger-predict-incorrect-number-of-dimensions-in-r) helped improved my code for the random forest tree.
+```{r}
+years_sorted <- sort(unique(model_df$year))
+min_train_years <- 3
+
+#for random forest put response variable in factor 
+feat_formula <- as.factor(y_next) ~ lat_bin + lon_bin + state + month_cos + month_sin + year +
+  n_fires + fire_lag12 + fire_roll3 + fire_roll12 + size_roll3 + size_roll12
+
+fold_results <- tibble(
+    train_end_year = years_sorted[(min_train_years):(length(years_sorted) - 2)],
+    valid_year = years_sorted[(min_train_years + 1):(length(years_sorted) - 1)]) %>%
+  mutate(
+    # Logistic Regression
+      auc_glm = map2_dbl(train_end_year, valid_year, function(tr_end, va_year) {
+          train <- model_df %>% filter(year <= tr_end)
+          valid <- model_df %>% filter(year == va_year)
+          
+          ######### FILL IN THE MISSING PARTS #########
+          fit <- glm(feat_formula , family = binomial, data = train)
+          p_hat <- predict(fit, newdata = valid, type = "response")
+
+          #########
+
+          roc_obj <- roc(response = valid$y_next, predictor = p_hat, quiet = TRUE)
+          as.numeric(auc(roc_obj))}),
+      #Random Forest
+    auc_rf = map2_dbl(train_end_year, valid_year, function(tr_end, va_year) {
+      
+      train <- model_df %>% filter(year <= tr_end)
+      valid <- model_df %>% filter(year == va_year)
+      fit <- ranger(feat_formula, data = train, num.trees = 200, mtry = 2,
+                    probability = TRUE)
+
+      p_rf <-predict(fit, data = valid)$predictions[, "1"]
+      roc_obj <- roc(response = valid$y_next, predictor = p_rf, quiet = TRUE)
+          as.numeric(auc(roc_obj))
+      
+      })
+  )
+
+fold_results
+
+fit <- ranger(feat_formula, data = train, num.trees = 200, mtry = 2,
+                    probability = TRUE)
+predict(fit, data = valid)$predictions
+```
+
+```{r}
+
+                        
+      
+
+      train_end_year = years_sorted[(min_train_years):(length(years_sorted) - 2)]
+      valid_year = years_sorted[(min_train_years + 1):(length(years_sorted) - 1)]
+     
+      xgBoost_fit <- xgboost(x =  train[, -1], y = train$y_next)
+      predict(xgBoost_fit, newdata = valid)
+
+      train <- model_df %>% filter(year <= 2010)
+          valid <- model_df %>% filter(year == 2011)
+          as.matrix(train[, -1])
+
+          xgBoost_fit <- xgboost(x = train_pred, y = train_response)
+          xg_prob <- predict(xgBoost_fit, valid_pred)
+
+
+          roc_obj <- roc(response = valid$y_next, predictor = xg_prob, quiet = TRUE)
+          as.numeric(auc(roc_obj))})
+      
+      
+
+  '        
+          dtrain <- xgb.DMatrix(data = train_pred, label = train_response)
+
+          
+          param <- xgb.params(
+            max_depth = 2,
+            objective = "binary:logistic",
+            eval_metric = "auc"
+          )
+          
+          bst <- xgb.train(param, dtrain, nrounds = 2, verbose = 0)
+          xg_prob <- predict(xgBoost_fit, valid_pred)
+  '
 
 ```
