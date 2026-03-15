@@ -16,8 +16,9 @@ suppressMessages({
 
 ```
 
-#Abstract
+# Abstract
 
+The goal of this report is **to predict whether a "notable" wildfire will occur in a grid by month panel of the contiguous United States**. We modified the dataset to be worked in space-time unit (grid by month). After analyzing spatial and temporal pattern, we implemented them alongside state monthly temperatures to create a baseline logistic regression model and two random forest models, one with temperature predictors and one without. After careful cross-validation that prevents data leakage, we then compared their predictive capabilities and **identified that random forest is a stronger predictive model by about 11.45% compared to logistic regression**. **Both random forest performed nearly the same**.
 
 # 1) Data Preprocessing
 
@@ -25,7 +26,7 @@ suppressMessages({
 
 The full dataset [link](https://www.kaggle.com/datasets/rtatman/188-million-us-wildfires/data) contains 1.88 million entries of wildfires. The dataset of is of 795 MB in size. I use a smaller subset that contains 100,000 entries provided by Dr. Shizhe Chen for his Winter 2026 STA141A course at UC Davis. Detailed description of variables in the dataset is available on Kaggle.
 
-For this prediction, we are focused mainly on the continental mainland of the United State. As such, states and territories such as Alaska, Hawaii, and Puerto Rico, which geographically and climate wise are substanstially different from the mainland will be filtered out of our dataset. I also safely filter out fires relating to Washington D.C from the data set as no fires from D.C are considered "notable" as explained later in the report in this subset. 
+**IMPORTANT NOTE**: For this prediction, we are focused mainly on the continental mainland of the United State. As such, states and territories such as Alaska, Hawaii, and Puerto Rico, which geographically and climate wise are substantially different from the mainland and will be filtered out of our dataset. I also safely filter out fires relating to Washington D.C from the data set as no fires from D.C are considered "notable" in this subset.
 
 ```{r}
 #dataset with 100k wildfires
@@ -35,7 +36,7 @@ wildFire100k <- wildFire100k %>%
 
 ```
 
-I also used [link](https://www.kaggle.com/datasets/justinrwong/average-monthly-temperature-by-us-state) to contribute the monthly/annual temperature of the states to this project. Credit to Justin Wong.
+I also used [link](https://www.kaggle.com/datasets/justinrwong/average-monthly-temperature-by-us-state) to contribute the monthly/annual temperature of the states (in Fahrenheit) to this project. Credit to Justin Wong.
 
 What I modified:
 
@@ -55,7 +56,7 @@ For our predictive purposes, I want to emphasize and use these specific columns:
 
 We use `FIRE_YEAR` and `DISCOVERY_DOY` to create a new column `FIRE_DATE` that puts the date in which the fire started in the format Y-M-D. We can also then separate that to get the individual year and month of each fire in the `YEAR` and `MONTH` column.
 
-For our predictive tasks, we are interested in identifying and predicting "notable" fires that can cause major damage. In order to reflect this, the dataset is filtered to include only fires with a final burned size of 300 acres (`FIRE_SIZE` \>= 300).
+For our predictive tasks, we are interested in identifying and predicting "**notable**" fires that can cause major damage. In order to reflect this, we will filter the dataset to include only fires with a final burned size of 300 acres (`FIRE_SIZE` \>= 300) which is generally a guideline for reportable large grassland fires according to the US Environmental Protection Agency. [Source](https://www.epa.gov/sites/default/files/2021-04/documents/wildfires_td.pdf)
 
 ```{r}
 #Filtered for notable fires
@@ -74,6 +75,8 @@ notableFiresTime <- notableFires %>%
 ```
 
 ## Creating a Grid for Spatial Pattern
+
+We create a 1x1 latitude/longitude grid cells that we can **use to identify where a wildfire occurred**. We will also predict if a notable wild fire will occur in these cells.
 
 ```{r}
 #GRID and for each lat and long
@@ -161,6 +164,17 @@ panel %>% select('state') %>% summary
 ```
 
 ### Incorporating Temperature and using it as Predictors
+
+### `average_temp` and `avg_temp_roll_3`
+
+**Two temperature based predictors** will be:
+
+`average_temp` - the average temperature for that state in that month and year
+
+`avg_temp_roll_3` - the average temperature for that state in the last 3 months
+
+-   **NOTE:** for dates where there are less than 3 months, we will use however many months there are and divide by that amount to calculate this column
+
 ```{r}
 state_monthly_year_temp
 
@@ -174,12 +188,11 @@ panel$state <-
 panel$month <- as.numeric(panel$month)
 state_monthly_year_temp$month <- as.numeric(state_monthly_year_temp$month)
 
-#create temp of last month column and also rolling 3 month temperature average 
+#create rolling 3 month temperature average 
 state_monthly_year_temp_prepped <- state_monthly_year_temp %>%
   arrange(state, year, month) %>%
   group_by(state) %>%
   mutate(
-    'last_month_temp' = coalesce(lag(average_temp, 1), average_temp),
     'avg_temp_roll_3' = slide_dbl(average_temp, mean, .before = 2)
   )
 
@@ -189,7 +202,10 @@ panel <- panel %>%
 
 ```
 
-### Seasonality (MONTHS)
+### Seasonality (MONTHS) (Predictors)
+
+### `month_sin` and `month_cos`
+
 We want to make it feel more like a cycle as numerically January and December are far apart; however, in reality they are close together.
 
 ```{r}
@@ -202,13 +218,26 @@ We want to make it feel more like a cycle as numerically January and December ar
 
 panel %>% select('month_sin', 'month_cos') %>% head
 ```
-### Lagged fire history
-`n_fires` - # of fires occurred that month and grid
-`fire_lag12` - # of fires occurred that month and grid one year ago
-`fire_roll3` - # of fire that occurred in this grid cell the last three months
-`fire_roll12` - # of fire that occurred in this grid cell the last year
+
+### Lagged fire history (Predictors)
+
+Using previous fire history, for example, amount of notable fires that appeared in that exact same grid last year and more recent activities like fires that appeared within the last three months, we can predict new ones. **The six predictors** we will create are:
+
+`n_fires` - \# of fires occurred that month and grid
+
+`fire_lag12` - \# of fires occurred that month and grid one year ago
+
+-   **NOTE:** for our first year (1992) in our dataset, we will set this column to 0
+
+`fire_roll3` - \# of fire that occurred in this grid cell the last three months
+
+`fire_roll12` - \# of fire that occurred in this grid cell the last year
+
 `size_roll3` - average fire size in this grid cell the last three months
+
 `size_roll12` - average fire size in this grid cell the last year
+
+-   **NOTE:** for columns that uses dates and there are less than 3 or 12 previous months, we will use however many months there are possible and divide by that amount to calculate
 
 ```{r}
 # mutate fire_size which will be used to calculate size_roll3 and size_roll12
@@ -244,7 +273,19 @@ panel %>%
 
 ```
 
+## Dataset Summary Tab
 
+What we want to predict: whether any notable fire occurs in grid cell next month (Binary outcome)
+
+**Predictors**: We have a wide range of predictors that cover spatial and temporal patterns, weather patterns, fire activity over both short and long term, and fire intensity
+
+[Static]{.underline}: latitude, longitude, state
+
+[Seasonal]{.underline}: month (sin and cos encoded), year
+
+[Temperature]{.underline}: average monthly temperature, rolling 3 month temperature
+
+[Lagged Fire History]{.underline}: Fire count this month, Fire count lag 12, Rolling fire counts over past 3 month, Rolling fire counts over past 12 month, Rolling average fire size over past 3 months, Rolling average fire size over past 12 months
 
 ```{r}
 #dataset_summary table
@@ -255,14 +296,15 @@ dataset_summary <- tibble(
   spatial_unit = "1° x 1° lat-lon grid (floor bins)",
   temporal_unit = "monthly",
   outcome = "y_next = 1 if any notable fire occurs in grid cell next month",
-  predictors = "lat_bin, lon_bin, state, last_month_temp, avg_temp_roll_3, month_cos, month_sin, year, n_fires, fire_lag12, fire_roll3, fire_roll12, size_roll3, size_roll12"
+  predictors = "lat_bin, lon_bin, state, average_temp, avg_temp_roll_3, month_cos, month_sin, year, n_fires, fire_lag12, fire_roll3, fire_roll12, size_roll3, size_roll12"
 )
+dataset_summary
 
 ```
 
-
-
 # 2) Exploratory Data Analysis
+
+Lets analyze our dataset a little more:
 
 ```{r}
 #For Time and Space Interactive PLOT
@@ -298,6 +340,8 @@ server <- function(input, output, session) {
 }
 shinyApp(ui, server)
 ```
+
+This plot establishes the fact that **not all areas get a lot of "notable fires"** (or at all in a subset sample of 100,000 in this report) as some grid cells don't show up in the heat map. We also notice that **some areas consistently have fires every couple of years**. One notable observation I found is that an area (couple of grid cells in a cluster) that had a higher than normal mean `y_next` (any lighter shades of blue) on the graph tends to be completely dark the next year. For example, if we look at northern Texas on the plot in 2011, we will see a relatively large groupings of cells that are light shaded. The next year 2012, that area is almost completely dark. **Areas that had higher big wildfire rates last year tend to have lower large wildfire rates the following year**. **States, lat/long coordinates, and years** seem like they will be big factors to predicting the following month's potential for large wildfires.
 
 ```{r}
 eda_month <- panel %>% 
@@ -336,32 +380,39 @@ server <- function(input, output, session) {
 shinyApp(ui, server)
 ```
 
-# 3) Modeling 
+Looking at the seasonality plot, there is a **clear pattern of the summer months and sometimes late spring months like May showing higher averages of probabilities of a notable fire in the next month**. Interestingly, 2009 is somewhat of an anomaly by having its peak mean probability of a notable fire being in the winter months leading to spring (February and March). If we look back on 2008, we do notice that its summer months rates for notable fires are a lot lower than average which could indicate why 2009 seem to have an early burst of notable wildfires. I also want to mention 2011 which also had a notably high probability rate during the winter months which were accompanied by a 2010 which was overall a low probability year for large wildfires. **Months, and once again years, seem to be important** Rolling monthly temperature could be important as well as it can detect the past few month's temperature and the current trend of the season/year(getting hotter vs getting colder).
+
+# 3) Modeling
 
 ```{r}
 model_df <- panel %>%
   mutate(y_next = factor(y_next, levels = c(0, 1))) %>%
-  select(y_next, lat_bin, lon_bin, state, 
+  select(y_next, lat_bin, lon_bin, state, average_temp, avg_temp_roll_3,
          month_cos, month_sin, year, 
          n_fires, fire_lag12, fire_roll3, fire_roll12, size_roll3, size_roll12)
 glimpse(model_df)
 ```
 
-In this report, we will fit two models:
+In this report, we will fit **three models**:
 
-1) Logistic Regression using the predictors: 
-`lat_bin`, `lon_bin`, `state`, `month_cos`, `month_sin`, `year`, `n_fires`, `fire_lag12`, `fire_roll3`, `fire_roll12`, `size_roll3`, `size_roll12`
-to predict `y_next` which indicates whether or not the next month will contain at least one "notable" wildfire. This model will serve as the benchmark for performance.
+1)  **Logistic Regression using the predictors (Excludes temperature predictors)**: `lat_bin`, `lon_bin`, `state`, `month_cos`, `month_sin`, `year`, `n_fires`, `fire_lag12`, `fire_roll3`, `fire_roll12`, `size_roll3`, and `size_roll12` to predict `y_next` which indicates whether or not the next month will contain at least one "notable" wildfire. This model will serve as the benchmark for performance.
 
+2)  **Random Forest with `ranger` package using the predictors (Exclude temperature predictors)**: `lat_bin`, `lon_bin`, `state`, `month_cos`, `month_sin`, `year`, `n_fires`, `fire_lag12`, `fire_roll3`, `fire_roll12`, `size_roll3`, and `size_roll12` to predict `y_next`. A decision tree like random forest is able to handle non-linear trends between our predictors and `y_next` better than a logistic regression and it remains interpretable.
 
+3)  **Random Forest with `ranger` package using the predictors (Include temperature predictors)**: `lat_bin`, `lon_bin`, `state`,`average_temp`, `avg_temp_roll_3`, `month_cos`, `month_sin`, `year`, `n_fires`, `fire_lag12`, `fire_roll3`, `fire_roll12`, `size_roll3`, and `size_roll12` to predict `y_next`. Similar to model two, but this plot will also be able to account for temperature through `average_temp` and `avg_temp_roll_3` as predictors.
 
-2) Random Forest with `ranger` package using the predictors: 
-`lat_bin`, `lon_bin`, `state`, `month_cos`, `month_sin`, `year`, `n_fires`, `fire_lag12`, `fire_roll3`, `fire_roll12`, `size_roll3`, `size_roll12`
-to predict `y_next`. A decision tree like random forest is able to handle non-linear trends between our predictors and `y_next` better than a logistic regression and it remains interpretable.
+Why Random Forest? Due to Random Forest being a combination of decision trees, it helps to reduce overfitting and since we want to consider many factors that can predict a wildfire, we are at risk of that.
 
 # 4 Model Fitting and Validation
 
+We will do an appropriate train/test fold split with our data that also respects time to prevent data leakage. With a minimum of at least three years used to train the data, we will then predict the following year as a test to see how we did on each fold:
+
+**Train on all years less than** $t$ **making sure there are at least three years to train on**
+
+**Test/validate on year** $t$ **and use AUC on the validation year to see how well we performed with each model.**
+
 [link](https://stackoverflow.com/questions/64060369/ranger-predict-incorrect-number-of-dimensions-in-r) helped improved my code for the random forest tree.
+
 ```{r}
 #set seed for repeatability
 set.seed(141)
@@ -371,6 +422,8 @@ min_train_years <- 3
 #for random forest put response variable in factor 
 feat_formula <- as.factor(y_next) ~ lat_bin + lon_bin + state + month_cos + month_sin + year +
   n_fires + fire_lag12 + fire_roll3 + fire_roll12 + size_roll3 + size_roll12
+
+feat_formula_rf <- as.factor(y_next) ~ lat_bin + lon_bin + state + average_temp + avg_temp_roll_3 + month_cos + month_sin + year +n_fires + fire_lag12 + fire_roll3 + fire_roll12 + size_roll3 + size_roll12
 
 fold_results <- tibble(
     train_end_year = years_sorted[(min_train_years):(length(years_sorted) - 2)],
@@ -389,16 +442,30 @@ fold_results <- tibble(
 
           roc_obj <- roc(response = valid$y_next, predictor = p_hat, quiet = TRUE)
           as.numeric(auc(roc_obj))}),
-      #Random Forest
-    auc_rf = map2_dbl(train_end_year, valid_year, function(tr_end, va_year) {
+        #Random Forest With Temperature
+      auc_rf = map2_dbl(train_end_year, valid_year, function(tr_end, va_year) {
       
-      train <- model_df %>% filter(year <= tr_end)
-      valid <- model_df %>% filter(year == va_year)
-      fit <- ranger(feat_formula, data = train, num.trees = 200, mtry = 2,
+        train <- model_df %>% filter(year <= tr_end)
+        valid <- model_df %>% filter(year == va_year)
+        fit <- ranger(feat_formula, data = train, num.trees = 200, mtry = 2,
                     probability = TRUE)
 
-      p_rf <-predict(fit, data = valid)$predictions[, "1"]
-      roc_obj <- roc(response = valid$y_next, predictor = p_rf, quiet = TRUE)
+        p_rf <-predict(fit, data = valid)$predictions[, "1"]
+        roc_obj <- roc(response = valid$y_next, predictor = p_rf, quiet = TRUE)
+          as.numeric(auc(roc_obj))
+      
+      }),
+      
+    #Random Forest With Temperature
+      auc_rf_temp = map2_dbl(train_end_year, valid_year, function(tr_end, va_year) {
+      
+        train <- model_df %>% filter(year <= tr_end)
+        valid <- model_df %>% filter(year == va_year)
+        fit <- ranger(feat_formula_rf, data = train, num.trees = 200, mtry = 2,
+                    probability = TRUE)
+
+        p_rf <-predict(fit, data = valid)$predictions[, "1"]
+        roc_obj <- roc(response = valid$y_next, predictor = p_rf, quiet = TRUE)
           as.numeric(auc(roc_obj))
       
       })
@@ -407,3 +474,41 @@ fold_results <- tibble(
 fold_results
 ```
 
+```{r}
+fold_long <- fold_results %>%
+  pivot_longer(
+    cols = c(auc_glm, auc_rf, auc_rf_temp),
+    names_to = "model",
+    values_to = "auc"
+  )
+
+ggplot(fold_long, aes(x = valid_year, y = auc, color = model)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "Time-aware cross-validation diagnostic: AUC by validation year",
+    x = "Validation year",
+    y = "AUC",
+    color = "Model"
+  ) + 
+  theme_minimal()
+
+
+cat('Overall, Random forest without temperature predictors outperforms logistic regression in AUC by ', 
+    round(mean(fold_results$auc_rf) / mean(fold_results$auc_glm) * 100, 4) - 100, "% ", sep= '')
+
+
+cat('\nOverall, Random forest with temperature predictors outperforms logistic regression in AUC by ', 
+    round(mean(fold_results$auc_rf_temp) / mean(fold_results$auc_glm) * 100, 4) - 100, "% ", sep= '')
+
+```
+
+**Comparison**: It is **clear that random forest is a stronger model for predicting wildfires than logistic regression**. However, surprisingly, **incorporating temperatures in the model had extremely little to no improvement for predicting (***11.4465% improvement vs 11.4521%*) . This could be a sign that temperature is relatively correlated to one of the other variables, and that could even mean overfitting even though random forest does relatively well against it. Since there is minuscule improvement between the two random forest model, we will **prefer the random forest model with no temperature predictors over the one with it for simplicity**.
+
+# 5 Summary
+
+Through this report, we do notice that there are patterns to wildfire occurrences. Areas that have recently endured multiple wildfires tend to not have less notable wildfires the next year. We also notice that seasons appear to be a strong factor in predicting wildfires: most wildfires occur in the summer or late spring. However, there are cases where wildfires have happened earlier, for example, around spring which might affect next years wildfire predictions as well.
+
+We created a model that predicts if there will be an occurrence of a notable wildfire in a grid cell of 1 by 1 in latitude and longitude. It trains using cross-validation that also respects time and doesn't use future data for prediction.
+
+The model demonstrated in this report captures a wide variety of including spatial and temporal patterns, fire activity patterns, and even temperature of respective states. This model found no major improvement in predicting notable wildfires using average monthly temperature and rolling three month average temperature; however, this could be a point interest for another report to examine further if it has to do with overfitting or a different selection of temperature variables.
