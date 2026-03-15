@@ -1,5 +1,6 @@
 ---
-title: "Report"
+title: "Final Report"
+author: "Alvin Guo"
 output: html_document
 ---
 
