@@ -4,16 +4,18 @@ output: html_document
 ---
 
 ```{r}
-suppressMessages({
-  library(tidyverse)
-  library(maps)
-  library(lubridate)
-  library(shiny)
-  library(slider)
-  library(ranger)
-  library(pROC)
+suppressWarnings({
+  suppressMessages({
+    library(tidyverse)
+    library(maps)
+    library(lubridate)
+    library(shiny)
+    library(slider)
+    library(ranger)
+    library(pROC)
+    library(rsconnect)
+  })
 })
-
 ```
 
 # Abstract
@@ -30,9 +32,10 @@ The full dataset [link](https://www.kaggle.com/datasets/rtatman/188-million-us-w
 
 ```{r}
 #dataset with 100k wildfires
-wildFire100k <- read_csv(file = "./Data/wildfires_sample_100k.csv") 
+wildFire100k <- read_csv(file = "./Data/wildfires_sample_100k.csv", show_col_types = FALSE) 
 wildFire100k <- wildFire100k %>%
   filter(STATE != "AK", STATE != "HI", STATE != "PR", STATE != "DC")
+head(wildFire100k)
 
 ```
 
@@ -47,7 +50,9 @@ What I modified:
 -   put all state names in column `state` into lowercase
 
 ```{r}
-state_monthly_year_temp <- read_csv(file = "./Data/states_monthly_yearly_temp.csv")
+state_monthly_year_temp <- read_csv(file = "./Data/states_monthly_yearly_temp.csv", show_col_types = FALSE)
+head(state_monthly_year_temp)
+
 ```
 
 ## Temporal Patterns and Threshold for "Notable" Fires
@@ -90,10 +95,14 @@ notableFiresTime <- notableFiresTime %>%
 
 ```{r}
 # Fire indicator at (grid, month): did any notable fire occur?
- grid_month_fire <- notableFiresTime %>% 
+suppressMessages({
+  grid_month_fire <- notableFiresTime %>% 
   group_by(lat_bin, lon_bin, ym) %>%
   summarize(n_fires = n(),
             fire_this_month = as.numeric(n_fires > 0))
+  
+})
+
 
 head(grid_month_fire)
 ```
@@ -152,10 +161,12 @@ This [link](https://www.statology.org/mode-in-r/) helped me develop the `mode_st
    
  }
 
+suppressMessages({
+  grid_state <- notableFiresTime %>% 
+    group_by(lat_bin, lon_bin) %>%
+    summarize(state = mode_state(STATE))
+})
 
- grid_state <- notableFiresTime %>% 
-   group_by(lat_bin, lon_bin) %>%
-   summarize(state = mode_state(STATE))
 
 panel <- panel %>%
   left_join(grid_state, by = c("lat_bin","lon_bin"))
@@ -241,9 +252,13 @@ Using previous fire history, for example, amount of notable fires that appeared 
 
 ```{r}
 # mutate fire_size which will be used to calculate size_roll3 and size_roll12
+suppressMessages({
 grid_fire_size <- notableFiresTime %>%
   group_by(lat_bin, lon_bin, ym) %>%
   summarize(fire_size = sum(FIRE_SIZE))
+  
+})
+
 
 
 panel <- panel %>%
@@ -266,10 +281,12 @@ panel <- panel %>%
       ifelse(fire_roll12 == 0, 0, slide_dbl(fire_size, sum, .before = 11)/fire_roll12)
   )
 
-panel %>% 
-  select("n_fires", "fire_lag12", "fire_roll3", "fire_roll12", 
+suppressMessages({
+  panel %>% 
+    select("n_fires", "fire_lag12", "fire_roll3", "fire_roll12", 
          "size_roll3", "size_roll12") %>%
-  summary()
+      summary()
+})
 
 ```
 
@@ -304,6 +321,10 @@ dataset_summary
 
 # 2) Exploratory Data Analysis
 
+## [link to interactive shiny plot](https://pigeon16.shinyapps.io/plots_for_final/)
+
+**NOTE**: [Since the plots are interactive, they can not be ran on a static html file. This is the link to my shinyapps that can run the shiny interactive plots used for my EDA.]{.underline}
+
 Lets analyze our dataset a little more:
 
 ```{r}
@@ -313,7 +334,9 @@ Lets analyze our dataset a little more:
 eda_spatial <- panel %>% 
   group_by(lat_bin, lon_bin, year) %>%
   mutate(fire_rate = mean(y_next))
+```
 
+```{r}
 ui <- fluidPage(
    sliderInput("Year", "Select a Year from 1992 to 2015", 
                value = 1992, min = 1992, max = 2015),
@@ -321,7 +344,9 @@ ui <- fluidPage(
   plotOutput("notableFireRate", height = "400")
 )
 )
+```
 
+```{r}
 server <- function(input, output, session) {
   output$notableFireRate <- renderPlot({
     #
@@ -348,8 +373,9 @@ eda_month <- panel %>%
   group_by(month, year) %>%
   mutate("mean_y_next" = mean(y_next))
 
+```
 
-#########
+```{r}
 ui <- fluidPage(
    sliderInput("Year", "Select a Year from 1992 to 2015", 
                value = 1992, min = 1992, max = 2015),
@@ -357,7 +383,9 @@ ui <- fluidPage(
   plotOutput("seasonFireRate", height = "400")
 )
 )
+```
 
+```{r}
 server <- function(input, output, session) {
   output$seasonFireRate <- renderPlot({
     #
@@ -380,7 +408,7 @@ server <- function(input, output, session) {
 shinyApp(ui, server)
 ```
 
-Looking at the seasonality plot, there is a **clear pattern of the summer months and sometimes late spring months like May showing higher averages of probabilities of a notable fire in the next month**. Interestingly, 2009 is somewhat of an anomaly by having its peak mean probability of a notable fire being in the winter months leading to spring (February and March). If we look back on 2008, we do notice that its summer months rates for notable fires are a lot lower than average which could indicate why 2009 seem to have an early burst of notable wildfires. I also want to mention 2011 which also had a notably high probability rate during the winter months which were accompanied by a 2010 which was overall a low probability year for large wildfires. **Months, and once again years, seem to be important** Rolling monthly temperature could be important as well as it can detect the past few month's temperature and the current trend of the season/year(getting hotter vs getting colder).
+Looking at the seasonality plot, there is a **clear pattern of the summer months and sometimes late spring months like May showing higher averages of probabilities of a notable fire in the next month**. Interestingly, 2009 is somewhat of an anomaly by having its peak mean probability of a notable fire being in the winter months leading to spring (February and March). If we look back on 2008, we do notice that its summer months rates for notable fires are a lot lower than average which could indicate why 2009 seem to have an early burst of notable wildfires. I also want to mention 2011 which also had a notably high probability rate during the winter months which were accompanied by a 2010 which was overall a low probability year for large wildfires. **Months, and once again years, seem to be important**. Rolling monthly temperature could be important as well as it can detect the past few month's temperature and the current trend of the season/year(getting hotter vs getting colder).
 
 # 3) Modeling
 
@@ -442,7 +470,7 @@ fold_results <- tibble(
 
           roc_obj <- roc(response = valid$y_next, predictor = p_hat, quiet = TRUE)
           as.numeric(auc(roc_obj))}),
-        #Random Forest With Temperature
+        #Random Forest Without Temperature
       auc_rf = map2_dbl(train_end_year, valid_year, function(tr_end, va_year) {
       
         train <- model_df %>% filter(year <= tr_end)
@@ -507,8 +535,8 @@ cat('\nOverall, Random forest with temperature predictors outperforms logistic r
 
 # 5 Summary
 
-Through this report, we do notice that there are patterns to wildfire occurrences. Areas that have recently endured multiple wildfires tend to not have less notable wildfires the next year. We also notice that seasons appear to be a strong factor in predicting wildfires: most wildfires occur in the summer or late spring. However, there are cases where wildfires have happened earlier, for example, around spring which might affect next years wildfire predictions as well.
+Through this report, we do notice that there are patterns to wildfire occurrences. **Areas that have recently endured multiple wildfires tend to not have less notable wildfires the next year**. We also notice that **seasons appear to be a strong factor in predicting wildfires**: most wildfires occur in the summer or late spring. However, there are cases where wildfires have happened earlier, for example, around spring which might affect next years wildfire predictions as well.
 
-We created a model that predicts if there will be an occurrence of a notable wildfire in a grid cell of 1 by 1 in latitude and longitude. It trains using cross-validation that also respects time and doesn't use future data for prediction.
+We created a model that predicts if there will be an occurrence of a notable wildfire in a grid cell of 1 by 1 in latitude and longitude. It **trains using cross-validation that also respects time and doesn't use future data for prediction**.
 
-The model demonstrated in this report captures a wide variety of including spatial and temporal patterns, fire activity patterns, and even temperature of respective states. This model found no major improvement in predicting notable wildfires using average monthly temperature and rolling three month average temperature; however, this could be a point interest for another report to examine further if it has to do with overfitting or a different selection of temperature variables.
+The model demonstrated in this report captures a wide variety of including spatial and temporal patterns, fire activity patterns, and even temperature of respective states. **This model found no major improvement in predicting notable wildfires using average monthly temperature and rolling three month average temperature**; however, this could be a point interest for another report to examine further if it has to do with overfitting or a different selection of temperature variables.
